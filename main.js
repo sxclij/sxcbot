@@ -75,7 +75,6 @@ const callback = async (event) => {
 
 const relay_url = "wss://yabu.me"
 const plamo_url = "https://platform.preferredai.jp/api/completion/v1/chat/completions"
-const plamo_auth = "NjZjZTgyYjYyOWZlYTg1NDQ1N2YwYWM1OlVTcnIyTmpiUzNlRkNnNHhybGhGTWZrMFk4a3B3S1Ix"
 // const sk = generateSecretKey()
 // await file_save("key.txt", Buffer.from(sk).toString("hex"))
 const sk = Uint8Array.from(Buffer.from(await file_read("key.txt"), "hex"))
