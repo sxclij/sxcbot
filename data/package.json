@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@google-cloud/aiplatform": "^3.34.0",
-    "@google/generative-ai": "^0.21.0"
+    "@google/generative-ai": "^0.21.0",
+    "@nostr/tools": "npm:@jsr/nostr__tools@^2.10.4"
   },
   "description": ""
 }
