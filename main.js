@@ -1,4 +1,4 @@
-/* Improved code with enhanced timeout logging, increased backoff, and documentation */
+/* Improved code to get notes only after started, with enhanced timeout logging, increased backoff, and dynamic subscription improvement */
 
 import {
   generateSecretKey,
@@ -8,11 +8,15 @@ import {
 } from "nostr-tools/pure";
 import { SimplePool } from "nostr-tools/pool";
 import { useWebSocketImplementation } from "nostr-tools/relay";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import WebSocket from "ws";
 import dotenv from "dotenv";
 
 dotenv.config();
 useWebSocketImplementation(WebSocket);
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
 
 // --- Helper functions (no changes) ---
 const hexToBytes = (hex) => {
@@ -33,6 +37,7 @@ const bytesToHex = (bytes) => {
 };
 
 // --- Relay URLs and Private Key Configuration (no changes) ---
+const PUBLISH_INTERVAL_MS = 1000;
 const RELAY_URLS_ENV = process.env.RELAY_URLS_ENV;
 let RELAY_URLS = RELAY_URLS_ENV ? RELAY_URLS_ENV.split(",") : [
   "wss://relay.damus.io",
@@ -107,8 +112,6 @@ async function publishWithRetry(relays, event, retries = 3, backoffSeconds = 2) 
 
 // --- Publish Task Queue and Rate Limiting (no changes) ---
 const publishQueue = [];
-const MAX_PUBLISH_PER_SECOND = 2;
-const PUBLISH_INTERVAL_MS = 1000 / MAX_PUBLISH_PER_SECOND;
 
 let isProcessingQueue = false;
 
@@ -153,55 +156,89 @@ function enqueuePublishTask(relays, event) {
 }
 
 
+const aiPrefix = "sxcbot.ai";
 async function handleEvent(event) {
   if (event.content === "sxcbot.ping") {
     console.log("Received sxcbot.ping from:", event.pubkey, ", replying with pong...");
+    await sendReply("pong", event);
+  }
+  else if (event.content.startsWith(aiPrefix)) {
+    console.log("Received AI query from:", event.pubkey);
+    const query = event.content.substring(aiPrefix.length + 1).trim();
 
-    const replyEventTemplate = {
-      kind: 1,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [["e", event.id], ["p", event.pubkey]],
-      content: "pong",
-    };
-    const signedReplyEvent = finalizeEvent(replyEventTemplate, hexToBytes(botPrivateKeyHex));
+    try {
+      // Generate response from Gemini
+      const result = await model.generateContent(query);
+      const response = result.response.text();
+      console.log("Generated AI response:", response);
 
-    const isGood = verifyEvent(signedReplyEvent);
-
-    if (isGood) {
-      console.log("Event verification successful for pong reply.");
-      enqueuePublishTask(RELAY_URLS, signedReplyEvent);
-    } else {
-      console.error("Event verification failed for pong reply.");
+      await sendReply(response, event);
+    } catch (error) {
+      console.error("Error generating AI response:", error);
+      await sendReply("Sorry, I encountered an error processing your AI query.", event);
     }
   }
 }
 
-// --- Subscription and Shutdown (no changes) ---
-console.log("Subscribing to relays for kind 1 events...");
-const sub = pool.subscribeMany(
-  RELAY_URLS,
-  [
-    {
-      kinds: [1],
-    },
-  ],
-  {
-    onevent: handleEvent,
-    oneose: () => {
-      console.log("Subscription ended (oneose - initial events received).");
-    },
-    onerror: (error) => {
-        console.error("Subscription error:", error);
-    }
-  }
-);
+// Helper function to send replies
+async function sendReply(content, originalEvent) {
+  const replyEventTemplate = {
+    kind: 1,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [["e", originalEvent.id], ["p", originalEvent.pubkey]],
+    content: content,
+  };
 
-console.log("Subscribed to relays successfully.");
+  const signedReplyEvent = finalizeEvent(replyEventTemplate, hexToBytes(botPrivateKeyHex));
+
+  const isGood = verifyEvent(signedReplyEvent);
+
+  if (isGood) {
+    console.log("Event verification successful for reply.");
+    enqueuePublishTask(RELAY_URLS, signedReplyEvent);
+  } else {
+    console.error("Event verification failed for reply.");
+  }
+}
+
+// --- Subscription and Shutdown ---
+let sub; // Declare sub in a higher scope
+let startTime = Math.floor(Date.now() / 1000); // Record bot startup time
+let subSince = startTime; // Initialize subSince with startTime
+
+function startSubscription() {
+    console.log("Subscribing to relays for kind 1 events since:", new Date(subSince * 1000).toISOString());
+    sub = pool.subscribeMany(
+      RELAY_URLS,
+      [
+        {
+          kinds: [1],
+          since: subSince // Use 'since' filter to get events after bot start
+        },
+      ],
+      {
+        onevent: handleEvent,
+        oneose: () => {
+          console.log("Subscription ended (oneose - initial events received).");
+        },
+        onerror: (error) => {
+            console.error("Subscription error:", error);
+            console.log("Attempting to re-subscribe in 5 seconds...");
+            setTimeout(startSubscription, 5000); // Re-subscribe after 5 seconds on error
+        }
+      }
+    );
+    console.log("Subscribed to relays successfully.");
+}
+
+startSubscription(); // Initial subscription
 
 process.on("SIGINT", () => {
   console.log("Shutting down bot gracefully...");
   console.log("Closing subscription...");
-  sub.close();
+  if (sub) {
+    sub.close();
+  }
   console.log("Closing pool connections...");
   pool.close();
   console.log("Bot shutdown complete.");
@@ -226,4 +263,10 @@ If persistent timeout issues occur, consider:
 2. Investigating network connectivity.
 3. Further testing with different relay sets or potentially exploring alternative Nostr client libraries
    if SimplePool's behavior remains problematic.
+
+--- Subscription Improvement Note ---
+The subscription process has been improved in two ways:
+1. **Re-subscription on Error:** The bot now automatically re-subscribes if a subscription error occurs, enhancing resilience.
+2. **Get Notes After Started:** The subscription filter now includes a `since` parameter. This ensures that the bot only receives notes created *after* the bot started running.
+   This is achieved by setting the `since` parameter to the bot's startup timestamp (`startTime`), effectively filtering out historical events and focusing only on new events from the point of subscription onwards.
 */
