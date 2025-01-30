@@ -47,6 +47,8 @@ let RELAY_URLS = RELAY_URLS_ENV ? RELAY_URLS_ENV.split(",") : [
   "wss://relay.damus.io",
   "wss://relay.snort.social",
   "wss://relay.nostr.band",
+  "wss://relay-jp.nostr.wirednet.jp",
+  "wss://yabu.me",
 ];
 
 if (RELAY_URLS.length === 0) {
