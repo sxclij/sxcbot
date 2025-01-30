@@ -36,9 +36,13 @@ const bytesToHex = (bytes) => {
     return hex;
 };
 
-// --- Relay URLs and Private Key Configuration (no changes) ---
+// --- Configuration Variables ---
 const PUBLISH_INTERVAL_MS = 1000;
 const RELAY_URLS_ENV = process.env.RELAY_URLS_ENV;
+const NOSTR_PRIVATE_HEX = process.env.NOSTR_PRIVATE_HEX;
+let botPrivateKeyHex = NOSTR_PRIVATE_HEX;
+const botPublicKey = getPublicKey(botPrivateKeyHex);
+const aiPrefix = "sxcbot.ai";
 let RELAY_URLS = RELAY_URLS_ENV ? RELAY_URLS_ENV.split(",") : [
   "wss://relay.damus.io",
   "wss://relay.snort.social",
@@ -50,8 +54,6 @@ if (RELAY_URLS.length === 0) {
     process.exit(1);
 }
 
-const NOSTR_PRIVATE_HEX = process.env.NOSTR_PRIVATE_HEX;
-let botPrivateKeyHex = NOSTR_PRIVATE_HEX;
 
 if (!botPrivateKeyHex) {
   botPrivateKeyHex = bytesToHex(generateSecretKey());
@@ -62,14 +64,15 @@ if (!botPrivateKeyHex) {
   );
 }
 
-const botPublicKey = getPublicKey(botPrivateKeyHex);
 
-// --- Initialize Nostr Pool (no changes) ---
+// --- Initialize Nostr Pool ---
 const pool = new SimplePool();
 
+// --- Startup Logs ---
 console.log("Starting sxcbot...");
 console.log("Relay URLs:", RELAY_URLS);
 console.log("Bot Public Key (hex):", botPublicKey);
+
 
 // --- Publish with Retry Function (enhanced logging, increased backoff) ---
 async function publishWithRetry(relays, event, retries = 3, backoffSeconds = 2) { // Increased backoffSeconds to 2
@@ -110,9 +113,8 @@ async function publishWithRetry(relays, event, retries = 3, backoffSeconds = 2) 
     return false; // Should not reach here, but for type safety
 }
 
-// --- Publish Task Queue and Rate Limiting (no changes) ---
+// --- Publish Task Queue and Rate Limiting ---
 const publishQueue = [];
-
 let isProcessingQueue = false;
 
 async function processPublishQueue() {
@@ -155,8 +157,29 @@ function enqueuePublishTask(relays, event) {
     }
 }
 
+// --- Event Handling Functions ---
+// Helper function to send replies
+async function sendReply(content, originalEvent) {
+  const replyEventTemplate = {
+    kind: 1,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [["e", originalEvent.id], ["p", originalEvent.pubkey]],
+    content: content,
+  };
 
-const aiPrefix = "sxcbot.ai";
+  const signedReplyEvent = finalizeEvent(replyEventTemplate, hexToBytes(botPrivateKeyHex));
+
+  const isGood = verifyEvent(signedReplyEvent);
+
+  if (isGood) {
+    console.log("Event verification successful for reply.");
+    enqueuePublishTask(RELAY_URLS, signedReplyEvent);
+  } else {
+    console.error("Event verification failed for reply.");
+  }
+}
+
+
 async function handleEvent(event) {
   if (event.content === "sxcbot.ping") {
     console.log("Received sxcbot.ping from:", event.pubkey, ", replying with pong...");
@@ -180,26 +203,6 @@ async function handleEvent(event) {
   }
 }
 
-// Helper function to send replies
-async function sendReply(content, originalEvent) {
-  const replyEventTemplate = {
-    kind: 1,
-    created_at: Math.floor(Date.now() / 1000),
-    tags: [["e", originalEvent.id], ["p", originalEvent.pubkey]],
-    content: content,
-  };
-
-  const signedReplyEvent = finalizeEvent(replyEventTemplate, hexToBytes(botPrivateKeyHex));
-
-  const isGood = verifyEvent(signedReplyEvent);
-
-  if (isGood) {
-    console.log("Event verification successful for reply.");
-    enqueuePublishTask(RELAY_URLS, signedReplyEvent);
-  } else {
-    console.error("Event verification failed for reply.");
-  }
-}
 
 // --- Subscription and Shutdown ---
 let sub; // Declare sub in a higher scope
